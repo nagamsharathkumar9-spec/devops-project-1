@@ -1,0 +1,22 @@
+name: Build and Run EMA Backtester
+
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  build-and-run:
+    runs-on: ubuntu-latest
+
+
+    steps:
+      - name: checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t ema-backtester .
+
+      - name: Run backtester container
+        run: docker run ema-backtester
