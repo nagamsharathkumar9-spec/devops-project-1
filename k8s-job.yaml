@@ -1,0 +1,16 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ema-backtester-job
+  labels:
+    app: ema-backtester
+
+spec:
+  ttlSecondsAfterFinished: 120
+  template:
+    spec:
+      containers:
+        - name: ema-backtester
+          image: docker.io/library/ema-backtester:latest
+          imagePullPolicy: Never
+      restartPolicy: Never
