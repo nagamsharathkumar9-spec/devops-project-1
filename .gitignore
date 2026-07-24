@@ -3,3 +3,6 @@ ema-backtester.tar
 .terraform/
 *.tfstate
 *.tfstate.backup
+helm.zip
+trivy.zip
+windows-amd64/
