@@ -1,2 +1,5 @@
 ema-backtester.tar
 *.tar
+.terraform/
+*.tfstate
+*.tfstate.backup
