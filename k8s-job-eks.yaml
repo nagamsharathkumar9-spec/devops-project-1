@@ -1,0 +1,15 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ema-backtester-eks
+  labels:
+    app: ema-backtester
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    spec:
+      containers:
+        - name: ema-backtester
+          image: 227769753445.dkr.ecr.ap-south-1.amazonaws.com/ema-backtester:latest
+          imagePullPolicy: Always
+      restartPolicy: Never
