@@ -4,7 +4,7 @@ WORKDIR /app
 
 COPY app.py .
 
-RUN pip install pandas
+RUN pip install pandas psycopg2-binary
 
 EXPOSE 8000
 

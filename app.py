@@ -1,13 +1,44 @@
-# EMA Backtester - Web API version
+# EMA Backtester - Web API with PostgreSQL
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import json
+import os
 import pandas as pd
 import random
+import psycopg2
+from datetime import datetime
 
 random.seed(42)
 
+# DB connection from environment variables (injected from K8s Secret)
+DB_CONFIG = {
+    "host": os.environ.get("DB_HOST", "localhost"),
+    "port": int(os.environ.get("DB_PORT", 5432)),
+    "database": os.environ.get("DB_NAME", "backtestdb"),
+    "user": os.environ.get("DB_USER", "backtester"),
+    "password": os.environ.get("DB_PASSWORD", "backtester123"),
+}
+
+def get_db_connection():
+    return psycopg2.connect(**DB_CONFIG)
+
+def init_db():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS backtest_results (
+            id SERIAL PRIMARY KEY,
+            run_at TIMESTAMP DEFAULT NOW(),
+            total_trades INTEGER,
+            win_rate FLOAT,
+            total_pnl FLOAT
+        )
+    """)
+    conn.commit()
+    cur.close()
+    conn.close()
+    print("Database initialized.")
+
 def run_backtest():
-    # Generate data
     dates = pd.date_range(start="2026-01-01", periods=50, freq="B")
     price = 21500.0
     rows = []
@@ -53,12 +84,50 @@ def run_backtest():
     total_pnl = sum(t["pnl"] for t in trade_log)
     win_rate = (sum(1 for t in trade_log if t["result"] == "WIN") / len(trade_log) * 100) if trade_log else 0
 
-    return {
+    result = {
         "total_trades": len(trade_log),
         "win_rate": round(win_rate, 2),
         "total_pnl": round(total_pnl, 2),
         "trades": trade_log
     }
+
+    # Save to PostgreSQL
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO backtest_results (total_trades, win_rate, total_pnl) VALUES (%s, %s, %s)",
+            (result["total_trades"], result["win_rate"], result["total_pnl"])
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+        print(f"Saved backtest result to database: {result['total_pnl']} P&L")
+    except Exception as e:
+        print(f"DB save error: {e}")
+
+    return result
+
+def get_results():
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT id, run_at, total_trades, win_rate, total_pnl FROM backtest_results ORDER BY run_at DESC")
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return [
+            {
+                "id": r[0],
+                "run_at": r[1].isoformat(),
+                "total_trades": r[2],
+                "win_rate": r[3],
+                "total_pnl": r[4]
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        return {"error": str(e)}
 
 class BacktestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -73,6 +142,12 @@ class BacktestHandler(BaseHTTPRequestHandler):
             self.send_header("Content-type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
+        elif self.path == "/results":
+            results = get_results()
+            self.send_response(200)
+            self.send_header("Content-type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(results).encode())
         else:
             self.send_response(404)
             self.end_headers()
@@ -81,6 +156,7 @@ class BacktestHandler(BaseHTTPRequestHandler):
         print(f"Request: {args[0]}")
 
 if __name__ == "__main__":
+    init_db()
     server = HTTPServer(("0.0.0.0", 8000), BacktestHandler)
     print("EMA Backtester API running on port 8000")
     server.serve_forever()
