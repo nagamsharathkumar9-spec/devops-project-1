@@ -14,37 +14,12 @@ spec:
       labels:
         app: ema-backtester
     spec:
+      serviceAccountName: ema-backtester-sa
       containers:
         - name: ema-backtester
-          image: 227769753445.dkr.ecr.ap-south-1.amazonaws.com/ema-backtester:v3
+          image: 227769753445.dkr.ecr.ap-south-1.amazonaws.com/ema-backtester:v2
           ports:
             - containerPort: 8000
-          env:
-            - name: DB_HOST
-              valueFrom:
-                secretKeyRef:
-                  name: postgres-credentials
-                  key: host
-            - name: DB_PORT
-              valueFrom:
-                secretKeyRef:
-                  name: postgres-credentials
-                  key: port
-            - name: DB_NAME
-              valueFrom:
-                secretKeyRef:
-                  name: postgres-credentials
-                  key: database
-            - name: DB_USER
-              valueFrom:
-                secretKeyRef:
-                  name: postgres-credentials
-                  key: username
-            - name: DB_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: postgres-credentials
-                  key: password
           resources:
             requests:
               cpu: "100m"
@@ -56,11 +31,11 @@ spec:
             httpGet:
               path: /health
               port: 8000
-            initialDelaySeconds: 15
+            initialDelaySeconds: 10
             periodSeconds: 10
           readinessProbe:
             httpGet:
               path: /health
               port: 8000
-            initialDelaySeconds: 10
+            initialDelaySeconds: 5
             periodSeconds: 5
