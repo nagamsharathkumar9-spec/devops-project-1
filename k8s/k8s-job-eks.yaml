@@ -4,6 +4,7 @@ metadata:
   name: ema-backtester-eks
   labels:
     app: ema-backtester
+    version: "v2"
 spec:
   ttlSecondsAfterFinished: 300
   template:
