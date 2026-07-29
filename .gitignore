@@ -1,10 +1,29 @@
-ema-backtester.tar
+# Generated data files
+*.csv
 *.tar
+*.zip
+*.msi
+*.exe
+
+# Install artifacts
+windows-amd64/
+__pycache__/
+*.pyc
+*.pyo
+
+# Terraform
 .terraform/
 *.tfstate
 *.tfstate.backup
-helm.zip
-trivy.zip
-windows-amd64/
-AWSCLIV2.msi
-eksctl_Windows_amd64.zip
+
+# Environment
+.env
+*.env
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
