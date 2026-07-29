@@ -1,0 +1,54 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: backtester-slo-rules
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  groups:
+    - name: backtester.slo
+      interval: 30s
+      rules:
+        # SLO 1: Availability — 99.5% of /health requests return 200
+        - alert: BacktesterAvailabilitySLOBreach
+          expr: |
+            (
+              sum(rate(http_requests_total{job="ema-backtester", path="/health", status="200"}[5m]))
+              /
+              sum(rate(http_requests_total{job="ema-backtester", path="/health"}[5m]))
+            ) < 0.995
+          for: 5m
+          labels:
+            severity: critical
+            slo: availability
+          annotations:
+            summary: "Backtester availability SLO breach"
+            description: "Availability has dropped below 99.5% for 5 minutes. Current value: {{ $value | humanizePercentage }}"
+
+        # SLO 2: Latency — p99 /backtest response time < 3 seconds
+        - alert: BacktesterLatencySLOBreach
+          expr: |
+            histogram_quantile(0.99,
+              sum(rate(http_request_duration_seconds_bucket{job="ema-backtester", path="/backtest"}[5m]))
+              by (le)
+            ) > 3
+          for: 5m
+          labels:
+            severity: warning
+            slo: latency
+          annotations:
+            summary: "Backtester latency SLO breach"
+            description: "p99 latency for /backtest has exceeded 3 seconds for 5 minutes. Current p99: {{ $value }}s"
+
+        # SLO 3: Pod availability — pod must be running
+        - alert: BacktesterPodDown
+          expr: |
+            kube_deployment_status_replicas_available{deployment="ema-backtester"} < 1
+          for: 2m
+          labels:
+            severity: critical
+            slo: availability
+          annotations:
+            summary: "Backtester pod is down"
+            description: "No available replicas for ema-backtester deployment for 2 minutes."
