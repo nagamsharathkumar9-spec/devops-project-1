@@ -1,15 +1,45 @@
-# EMA Backtester - Web API with PostgreSQL
+# EMA Backtester - Web API with PostgreSQL + Prometheus metrics
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import json
 import os
+import time
 import pandas as pd
 import random
 import psycopg2
-from datetime import datetime
+from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 
 random.seed(42)
 
+# ============================================================
+# Prometheus metrics — supports SLO monitoring
+# ============================================================
+REQUEST_COUNT = Counter(
+    'http_requests_total',
+    'Total HTTP requests',
+    ['method', 'path', 'status']
+)
+
+REQUEST_LATENCY = Histogram(
+    'http_request_duration_seconds',
+    'HTTP request latency in seconds',
+    ['path'],
+    buckets=[0.1, 0.5, 1.0, 2.0, 3.0, 5.0, 10.0]
+)
+
+BACKTEST_COUNT = Counter(
+    'backtest_runs_total',
+    'Total number of backtests run'
+)
+
+DB_SAVE_COUNT = Counter(
+    'db_saves_total',
+    'Total database save operations',
+    ['status']
+)
+
+# ============================================================
 # DB connection from environment variables (injected from K8s Secret)
+# ============================================================
 DB_CONFIG = {
     "host": os.environ.get("DB_HOST", "localhost"),
     "port": int(os.environ.get("DB_PORT", 5432)),
@@ -102,9 +132,11 @@ def run_backtest():
         conn.commit()
         cur.close()
         conn.close()
+        DB_SAVE_COUNT.labels(status="success").inc()
         print(f"Saved backtest result to database: {result['total_pnl']} P&L")
     except Exception as e:
         print(f"DB save error: {e}")
+        DB_SAVE_COUNT.labels(status="error").inc()
 
     return result
 
@@ -131,26 +163,44 @@ def get_results():
 
 class BacktestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
+        start_time = time.time()
+
         if self.path == "/health":
             self.send_response(200)
             self.send_header("Content-type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps({"status": "healthy"}).encode())
+            REQUEST_COUNT.labels(method="GET", path="/health", status="200").inc()
+
         elif self.path == "/backtest":
             result = run_backtest()
             self.send_response(200)
             self.send_header("Content-type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
+            REQUEST_COUNT.labels(method="GET", path="/backtest", status="200").inc()
+            BACKTEST_COUNT.inc()
+
         elif self.path == "/results":
             results = get_results()
             self.send_response(200)
             self.send_header("Content-type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps(results).encode())
+            REQUEST_COUNT.labels(method="GET", path="/results", status="200").inc()
+
+        elif self.path == "/metrics":
+            self.send_response(200)
+            self.send_header("Content-type", CONTENT_TYPE_LATEST)
+            self.end_headers()
+            self.wfile.write(generate_latest())
+
         else:
             self.send_response(404)
             self.end_headers()
+            REQUEST_COUNT.labels(method="GET", path=self.path, status="404").inc()
+
+        REQUEST_LATENCY.labels(path=self.path).observe(time.time() - start_time)
 
     def log_message(self, format, *args):
         print(f"Request: {args[0]}")
@@ -159,4 +209,5 @@ if __name__ == "__main__":
     init_db()
     server = HTTPServer(("0.0.0.0", 8000), BacktestHandler)
     print("EMA Backtester API running on port 8000")
+    print("Endpoints: /health /backtest /results /metrics")
     server.serve_forever()
