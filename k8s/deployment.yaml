@@ -2,8 +2,10 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: ema-backtester
+  namespace: default
   labels:
     app: ema-backtester
+    version: "3.0"
 spec:
   replicas: 1
   selector:
@@ -13,13 +15,46 @@ spec:
     metadata:
       labels:
         app: ema-backtester
+        version: "3.0"
     spec:
       serviceAccountName: ema-backtester-sa
+
+      # initContainer waits for PostgreSQL before starting the main app
+      # This prevents CrashLoopBackOff when PostgreSQL is slow to start
+      initContainers:
+        - name: wait-for-postgres
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for PostgreSQL to be ready..."
+              until nc -z postgres-postgresql.default.svc.cluster.local 5432; do
+                echo "PostgreSQL not ready yet. Retrying in 5 seconds..."
+                sleep 5
+              done
+              echo "PostgreSQL is ready. Starting backtester."
+
       containers:
         - name: ema-backtester
-          image: 227769753445.dkr.ecr.ap-south-1.amazonaws.com/ema-backtester:v2
+          image: 227769753445.dkr.ecr.ap-south-1.amazonaws.com/ema-backtester:latest
+          imagePullPolicy: Always
           ports:
             - containerPort: 8000
+
+          # Non-sensitive config from ConfigMap
+          envFrom:
+            - configMapRef:
+                name: backtester-config
+
+          # Sensitive config from Secret (only the password)
+          env:
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: password
+
           resources:
             requests:
               cpu: "100m"
@@ -27,15 +62,19 @@ spec:
             limits:
               cpu: "500m"
               memory: "256Mi"
+
           livenessProbe:
             httpGet:
               path: /health
               port: 8000
-            initialDelaySeconds: 10
+            initialDelaySeconds: 15
             periodSeconds: 10
+            failureThreshold: 3
+
           readinessProbe:
             httpGet:
               path: /health
               port: 8000
-            initialDelaySeconds: 5
+            initialDelaySeconds: 10
             periodSeconds: 5
+            failureThreshold: 3
