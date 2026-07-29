@@ -266,3 +266,4 @@ curl http://localhost:8001/results # returns historical data from restored DB
 
 **Expected total recovery time: ~25-30 minutes**
 **Data loss: Maximum 24 hours (last DLM snapshot)**
+| **Total active session** | **~₹8/hour** | **Always delete when done** |
