@@ -201,3 +201,68 @@ git push --force-with-lease
 | ECR Storage | ~₹5/month | Leave running (minimal cost) |
 | CloudWatch Logs | ~₹10/month | Leave running |
 | **Total active session** | **~₹8/hour** | **Always delete when done** |
+
+---
+
+## 9. Disaster Recovery Procedure
+
+### RPO: 24 hours | RTO: 30 minutes
+
+**Scenario: Complete cluster loss (region outage, accidental deletion)**
+
+#### Step 1: Assess (5 minutes)
+```bash
+# Check if cluster exists
+aws eks describe-cluster --name ema-backtester-cluster --region ap-south-1
+
+# Check EBS snapshots available
+aws ec2 describe-snapshots \
+  --filters "Name=tag:Project,Values=ema-backtester" \
+  --query 'Snapshots[*].[SnapshotId,StartTime,State]' \
+  --output table
+```
+
+#### Step 2: Recreate cluster (15-20 minutes)
+```bash
+eksctl create cluster \
+  --name ema-backtester-cluster \
+  --region ap-south-1 \
+  --node-type t3.small \
+  --nodes 2 --managed
+
+aws eks update-kubeconfig \
+  --region ap-south-1 \
+  --name ema-backtester-cluster
+```
+
+#### Step 3: Restore PostgreSQL from snapshot (5 minutes)
+```bash
+# Create EBS volume from latest snapshot
+aws ec2 create-volume \
+  --snapshot-id <latest-snapshot-id> \
+  --availability-zone ap-south-1a \
+  --volume-type gp2
+
+# Deploy PostgreSQL pointing to restored volume
+# (update PV manifest with new volume ID)
+```
+
+#### Step 4: Redeploy application (3-5 minutes)
+```bash
+# ArgoCD auto-deploys from Git when installed
+kubectl create namespace argocd
+kubectl apply -n argocd \
+  -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+kubectl apply -f k8s/argocd-app.yaml
+```
+
+#### Step 5: Verify recovery
+```bash
+kubectl get pods          # all pods Running
+kubectl get hpa           # HPA active
+curl http://localhost:8001/health  # returns {"status": "healthy"}
+curl http://localhost:8001/results # returns historical data from restored DB
+```
+
+**Expected total recovery time: ~25-30 minutes**
+**Data loss: Maximum 24 hours (last DLM snapshot)**
