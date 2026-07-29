@@ -1,0 +1,39 @@
+# Learning scripts — not needed in container
+learning/
+
+# Infrastructure files — not part of the app
+terraform/
+k8s/
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+*.md
+README*
+
+# CI/CD
+.github/
+
+# Test files
+test_*.py
+*_test.py
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment files (never copy secrets into image)
+.env
+*.env
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
