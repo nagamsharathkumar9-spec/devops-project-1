@@ -15,7 +15,9 @@ EMA_LONG = 21
 # ============================================
 # STEP 1: Load real market data
 # ============================================
-print(f"\nRunning EMA {EMA_SHORT}/{EMA_LONG} Crossover Backtest on {SYMBOL}")
+
+if __name__ == "__main__":
+    print(f"\nRunning EMA {EMA_SHORT}/{EMA_LONG} Crossover Backtest on {SYMBOL}")
 print("=" * 60)
 
 df = fetch_nifty_data(symbol=SYMBOL, period=PERIOD)
