@@ -9,21 +9,38 @@ from containerization to GitOps deployment, autoscaling, observability, and AI-a
 ---
 
 ## Architecture
-Developer → Git Push → GitHub Actions (test → scan → build → push)
-↓
-AWS ECR (image registry)
-↓
-ArgoCD (GitOps sync)
-↓
-AWS EKS (Kubernetes)
-├── EMA Backtester API (Deployment + HPA)
-├── PostgreSQL (StatefulSet + EBS)
-└── Prometheus + Grafana (monitoring)
-↓
-MCP Server → Claude API → Slack
-(AIOps incident response — Project 3)
----
+## Architecture
 
+```mermaid
+flowchart TD
+    A[Developer] -->|git push| B[GitHub Actions]
+    B --> C[Run Unit Tests]
+    C --> D[Trivy Security Scan]
+    D --> E[Build & Push Image]
+    E --> F[(AWS ECR)]
+    F --> G[ArgoCD]
+    G -->|GitOps Sync| H[AWS EKS Cluster]
+
+    subgraph H[AWS EKS Cluster]
+        I[EMA Backtester API<br/>Deployment + HPA]
+        J[(PostgreSQL<br/>StatefulSet + EBS)]
+        K[Prometheus + Grafana]
+        I --> J
+        K -.monitors.-> I
+        K -.monitors.-> J
+    end
+
+    K --> L[AlertManager]
+    L --> M[MCP Server]
+    M --> N[Claude API]
+    N --> O[Slack]
+
+    style A fill:#e1f5fe
+    style F fill:#fff3e0
+    style H fill:#f3e5f5
+    style N fill:#e8f5e9
+    style O fill:#fce4ec
+```
 ## Tech Stack
 
 | Category | Technology |
