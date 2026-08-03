@@ -11,7 +11,10 @@ Guardrail principle:
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from kubernetes import client, config
+<<<<<<< HEAD
 from anthropic import Anthropic
+=======
+>>>>>>> origin/master
 from datetime import datetime
 import secrets
 import os
@@ -33,12 +36,15 @@ v1 = client.CoreV1Api()
 apps_v1 = client.AppsV1Api()
 
 # ============================================================
+<<<<<<< HEAD
 # Claude API client
 # ============================================================
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 claude_client = Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
 
 # ============================================================
+=======
+>>>>>>> origin/master
 # In-memory approval token store
 # In production this would be Redis or a database with TTL
 # ============================================================
@@ -67,12 +73,15 @@ class ApprovalRequest(BaseModel):
     reason: str
 
 
+<<<<<<< HEAD
 class IncidentAnalysisRequest(BaseModel):
     pod_name: str
     deployment_name: str
     lines: int = 50
 
 
+=======
+>>>>>>> origin/master
 # ============================================================
 # TOOL 1 (READ): Get Pod Logs
 # ============================================================
@@ -142,6 +151,7 @@ def get_deployment_status(req: DeploymentStatusRequest):
 
 
 # ============================================================
+<<<<<<< HEAD
 # AI ANALYSIS: Claude-powered incident analysis
 # Gathers pod logs + deployment status, sends to Claude for analysis
 # ============================================================
@@ -208,6 +218,8 @@ Be direct and technical. This will be posted to a Slack channel for on-call engi
 
 
 # ============================================================
+=======
+>>>>>>> origin/master
 # APPROVAL: Generate a one-time approval token
 # This simulates a human clicking "approve" on an incident
 # ============================================================
