@@ -11,6 +11,7 @@ Guardrail principle:
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from kubernetes import client, config
+from anthropic import Anthropic
 from datetime import datetime
 import secrets
 import os
@@ -30,6 +31,12 @@ except config.ConfigException:
 
 v1 = client.CoreV1Api()
 apps_v1 = client.AppsV1Api()
+
+# ============================================================
+# Claude API client
+# ============================================================
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+claude_client = Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
 
 # ============================================================
 # In-memory approval token store
@@ -58,6 +65,12 @@ class RestartPodRequest(BaseModel):
 
 class ApprovalRequest(BaseModel):
     reason: str
+
+
+class IncidentAnalysisRequest(BaseModel):
+    pod_name: str
+    deployment_name: str
+    lines: int = 50
 
 
 # ============================================================
@@ -129,6 +142,72 @@ def get_deployment_status(req: DeploymentStatusRequest):
 
 
 # ============================================================
+# AI ANALYSIS: Claude-powered incident analysis
+# Gathers pod logs + deployment status, sends to Claude for analysis
+# ============================================================
+@app.post("/analyze_incident")
+def analyze_incident(req: IncidentAnalysisRequest):
+    """
+    Gathers context (logs + deployment status) and asks Claude to produce
+    a plain-English incident analysis with likely root cause and
+    recommended next steps.
+    """
+    if not claude_client:
+        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not configured")
+
+    # Step 1: Gather context using our own read tools
+    try:
+        logs_data = get_pod_logs(PodLogsRequest(pod_name=req.pod_name, lines=req.lines))
+    except HTTPException as e:
+        logs_data = {"error": str(e.detail), "logs": ""}
+
+    try:
+        status_data = get_deployment_status(DeploymentStatusRequest(deployment_name=req.deployment_name))
+    except HTTPException as e:
+        status_data = {"error": str(e.detail)}
+
+    # Step 2: Build the prompt for Claude
+    prompt = f"""You are an SRE assistant analyzing a Kubernetes incident.
+
+DEPLOYMENT STATUS:
+{status_data}
+
+RECENT POD LOGS (last {req.lines} lines):
+{logs_data.get('logs', 'No logs available')}
+
+Provide a concise incident analysis in this exact format:
+1. SEVERITY: (Critical/Warning/Info)
+2. LIKELY ROOT CAUSE: (one or two sentences)
+3. IMPACT: (what is affected)
+4. RECOMMENDED ACTION: (specific next step)
+
+Be direct and technical. This will be posted to a Slack channel for on-call engineers."""
+
+    # Step 3: Call Claude API
+    try:
+        message = claude_client.messages.create(
+            model="claude-sonnet-4-5-20250929",
+            max_tokens=500,
+            messages=[
+                {"role": "user", "content": prompt}
+            ]
+        )
+        analysis = message.content[0].text
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Claude API error: {str(e)}")
+
+    return {
+        "pod_name": req.pod_name,
+        "deployment_name": req.deployment_name,
+        "analysis": analysis,
+        "raw_context": {
+            "deployment_status": status_data,
+            "log_lines_analyzed": req.lines
+        }
+    }
+
+
+# ============================================================
 # APPROVAL: Generate a one-time approval token
 # This simulates a human clicking "approve" on an incident
 # ============================================================
@@ -192,7 +271,11 @@ def restart_pod(req: RestartPodRequest):
 # ============================================================
 @app.get("/health")
 def health():
-    return {"status": "healthy", "service": "mcp-server"}
+    return {
+        "status": "healthy",
+        "service": "mcp-server",
+        "claude_configured": claude_client is not None
+    }
 
 
 if __name__ == "__main__":
