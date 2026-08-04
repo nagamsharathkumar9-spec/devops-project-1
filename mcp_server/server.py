@@ -201,6 +201,76 @@ Be direct and technical. This will be posted to a Slack channel for on-call engi
 
 
 # ============================================================
+# WEBHOOK: Receives alerts from Prometheus AlertManager
+# Automatically triggers Claude analysis when an SLO breaches
+# ============================================================
+@app.post("/webhook/alert")
+def receive_alert(payload: dict):
+    """
+    AlertManager POSTs here when an alert fires (matching our
+    Prometheus SLO rules from Session 5). Extracts pod/deployment
+    labels from the alert and automatically runs incident analysis.
+    """
+    alerts = payload.get("alerts", [])
+    results = []
+
+    for alert in alerts:
+        labels = alert.get("labels", {})
+        status = alert.get("status", "unknown")
+
+        if status != "firing":
+            continue
+
+        alert_name = labels.get("alertname", "unknown")
+        deployment_name = labels.get("deployment", "ema-backtester")
+        pod_name = labels.get("pod", "")
+
+        print(f"Alert received: {alert_name} | status={status} | pod={pod_name}")
+
+        if not pod_name:
+            try:
+                pods = v1.list_namespaced_pod(
+                    namespace=NAMESPACE,
+                    label_selector=f"app={deployment_name}"
+                )
+                if pods.items:
+                    pod_name = pods.items[0].metadata.name
+            except Exception as e:
+                print(f"Could not find pod for deployment {deployment_name}: {e}")
+
+        if not pod_name:
+            results.append({
+                "alert_name": alert_name,
+                "status": "skipped",
+                "reason": "no pod found to analyze"
+            })
+            continue
+
+        try:
+            analysis_result = analyze_incident(
+                IncidentAnalysisRequest(
+                    pod_name=pod_name,
+                    deployment_name=deployment_name,
+                    lines=50
+                )
+            )
+            results.append({
+                "alert_name": alert_name,
+                "status": "analyzed",
+                "analysis": analysis_result["analysis"]
+            })
+            print(f"Auto-analysis complete for alert: {alert_name}")
+        except Exception as e:
+            results.append({
+                "alert_name": alert_name,
+                "status": "error",
+                "reason": str(e)
+            })
+
+    return {"processed_alerts": len(results), "results": results}
+
+
+# ============================================================
 # APPROVAL: Generate a one-time approval token
 # ============================================================
 @app.post("/tools/request_approval")
