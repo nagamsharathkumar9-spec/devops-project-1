@@ -1,0 +1,54 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: anthropic-api-key
+  namespace: default
+type: Opaque
+stringData:
+  api-key: "REPLACE_WITH_YOUR_KEY"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-server
+  namespace: default
+  labels:
+    app: mcp-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcp-server
+  template:
+    metadata:
+      labels:
+        app: mcp-server
+    spec:
+      serviceAccountName: mcp-server-sa
+      containers:
+        - name: mcp-server
+          image: mcp-server:v1
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 9000
+          env:
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: anthropic-api-key
+                  key: api-key
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-server-service
+  namespace: default
+spec:
+  selector:
+    app: mcp-server
+  ports:
+    - protocol: TCP
+      port: 9000
+      targetPort: 9000
+  type: ClusterIP
