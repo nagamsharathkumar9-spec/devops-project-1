@@ -37,6 +37,16 @@ spec:
                 secretKeyRef:
                   name: anthropic-api-key
                   key: api-key
+            - name: SLACK_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: slack-webhook
+                  key: url
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: password
 
 ---
 apiVersion: v1

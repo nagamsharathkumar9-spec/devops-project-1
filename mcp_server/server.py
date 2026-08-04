@@ -15,12 +15,14 @@ from anthropic import Anthropic
 from datetime import datetime
 import secrets
 import os
+import re
+import requests
+import psycopg2
 
 app = FastAPI(title="EMA Backtester MCP Server", version="1.0")
 
 # ============================================================
 # Load Kubernetes config
-# Works both in-cluster (when deployed) and locally (via kubeconfig)
 # ============================================================
 try:
     config.load_incluster_config()
@@ -39,8 +41,55 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 claude_client = Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
 
 # ============================================================
+# Slack webhook
+# ============================================================
+SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL")
+
+# ============================================================
+# PostgreSQL connection for post-mortem storage
+# ============================================================
+DB_CONFIG = {
+    "host": os.environ.get("DB_HOST", "postgres-postgresql.default.svc.cluster.local"),
+    "port": int(os.environ.get("DB_PORT", 5432)),
+    "database": os.environ.get("DB_NAME", "backtestdb"),
+    "user": os.environ.get("DB_USER", "backtester"),
+    "password": os.environ.get("DB_PASSWORD", "backtester123"),
+}
+
+
+def get_db_connection():
+    return psycopg2.connect(**DB_CONFIG)
+
+
+def init_postmortem_db():
+    """Creates the incident_postmortems table if it doesn't exist."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS incident_postmortems (
+                id SERIAL PRIMARY KEY,
+                alert_name TEXT,
+                pod_name TEXT,
+                deployment_name TEXT,
+                severity TEXT,
+                analysis TEXT,
+                detected_at TIMESTAMP DEFAULT NOW(),
+                slack_posted BOOLEAN DEFAULT FALSE
+            )
+        """)
+        conn.commit()
+        cur.close()
+        conn.close()
+        print("Post-mortem table initialized.")
+    except Exception as e:
+        print(f"Could not initialize post-mortem table: {e}")
+
+
+init_postmortem_db()
+
+# ============================================================
 # In-memory approval token store
-# In production this would be Redis or a database with TTL
 # ============================================================
 APPROVAL_TOKENS = {}
 NAMESPACE = os.environ.get("K8S_NAMESPACE", "default")
@@ -71,6 +120,7 @@ class IncidentAnalysisRequest(BaseModel):
     pod_name: str
     deployment_name: str
     lines: int = 50
+    alert_name: str = "manual_trigger"
 
 
 # ============================================================
@@ -78,10 +128,7 @@ class IncidentAnalysisRequest(BaseModel):
 # ============================================================
 @app.post("/tools/get_pod_logs")
 def get_pod_logs(req: PodLogsRequest):
-    """
-    Read-only. Returns the last N lines of logs from a specific pod.
-    No approval required — this is a safe, non-destructive operation.
-    """
+    """Read-only. Returns the last N lines of logs from a specific pod."""
     try:
         logs = v1.read_namespaced_pod_log(
             name=req.pod_name,
@@ -107,10 +154,7 @@ def get_pod_logs(req: PodLogsRequest):
 # ============================================================
 @app.post("/tools/get_deployment_status")
 def get_deployment_status(req: DeploymentStatusRequest):
-    """
-    Read-only. Returns replica counts, conditions, and health of a deployment.
-    No approval required.
-    """
+    """Read-only. Returns replica counts, conditions, and health of a deployment."""
     try:
         deployment = apps_v1.read_namespaced_deployment(
             name=req.deployment_name,
@@ -139,14 +183,93 @@ def get_deployment_status(req: DeploymentStatusRequest):
 
 
 # ============================================================
+# HELPER: Extract severity from Claude's structured analysis
+# ============================================================
+def extract_severity(analysis_text: str) -> str:
+    match = re.search(r"SEVERITY:\**\s*\**\s*(Critical|Warning|Info)", analysis_text, re.IGNORECASE)
+    return match.group(1).capitalize() if match else "Unknown"
+
+
+# ============================================================
+# HELPER: Post formatted message to Slack
+# ============================================================
+def post_to_slack(alert_name: str, pod_name: str, deployment_name: str, severity: str, analysis: str) -> bool:
+    if not SLACK_WEBHOOK_URL:
+        print("SLACK_WEBHOOK_URL not configured, skipping Slack post")
+        return False
+
+    severity_emoji = {
+        "Critical": "🔴",
+        "Warning": "🟡",
+        "Info": "🟢",
+        "Unknown": "⚪"
+    }.get(severity, "⚪")
+
+    message = {
+        "blocks": [
+            {
+                "type": "header",
+                "text": {
+                    "type": "plain_text",
+                    "text": f"{severity_emoji} Incident Alert: {alert_name}"
+                }
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {"type": "mrkdwn", "text": f"*Deployment:*\n{deployment_name}"},
+                    {"type": "mrkdwn", "text": f"*Pod:*\n{pod_name}"},
+                    {"type": "mrkdwn", "text": f"*Severity:*\n{severity}"},
+                    {"type": "mrkdwn", "text": f"*Detected:*\n{datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}"}
+                ]
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*AI Analysis:*\n```{analysis}```"
+                }
+            }
+        ]
+    }
+
+    try:
+        response = requests.post(SLACK_WEBHOOK_URL, json=message, timeout=5)
+        return response.status_code == 200
+    except Exception as e:
+        print(f"Slack post failed: {e}")
+        return False
+
+
+# ============================================================
+# HELPER: Save post-mortem to PostgreSQL
+# ============================================================
+def save_postmortem(alert_name: str, pod_name: str, deployment_name: str, severity: str, analysis: str, slack_posted: bool):
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO incident_postmortems
+               (alert_name, pod_name, deployment_name, severity, analysis, slack_posted)
+               VALUES (%s, %s, %s, %s, %s, %s)""",
+            (alert_name, pod_name, deployment_name, severity, analysis, slack_posted)
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+        print(f"Post-mortem saved for alert: {alert_name}")
+    except Exception as e:
+        print(f"Failed to save post-mortem: {e}")
+
+
+# ============================================================
 # AI ANALYSIS: Claude-powered incident analysis
+# Now posts to Slack and saves to PostgreSQL automatically
 # ============================================================
 @app.post("/analyze_incident")
 def analyze_incident(req: IncidentAnalysisRequest):
     """
-    Gathers context (logs + deployment status) and asks Claude to produce
-    a plain-English incident analysis with likely root cause and
-    recommended next steps.
+    Gathers context, asks Claude to analyze, posts to Slack, saves to DB.
     """
     if not claude_client:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not configured")
@@ -181,18 +304,37 @@ Be direct and technical. This will be posted to a Slack channel for on-call engi
         message = claude_client.messages.create(
             model="claude-sonnet-4-5-20250929",
             max_tokens=500,
-            messages=[
-                {"role": "user", "content": prompt}
-            ]
+            messages=[{"role": "user", "content": prompt}]
         )
         analysis = message.content[0].text
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Claude API error: {str(e)}")
 
+    severity = extract_severity(analysis)
+
+    slack_posted = post_to_slack(
+        alert_name=req.alert_name,
+        pod_name=req.pod_name,
+        deployment_name=req.deployment_name,
+        severity=severity,
+        analysis=analysis
+    )
+
+    save_postmortem(
+        alert_name=req.alert_name,
+        pod_name=req.pod_name,
+        deployment_name=req.deployment_name,
+        severity=severity,
+        analysis=analysis,
+        slack_posted=slack_posted
+    )
+
     return {
         "pod_name": req.pod_name,
         "deployment_name": req.deployment_name,
+        "severity": severity,
         "analysis": analysis,
+        "slack_posted": slack_posted,
         "raw_context": {
             "deployment_status": status_data,
             "log_lines_analyzed": req.lines
@@ -202,15 +344,10 @@ Be direct and technical. This will be posted to a Slack channel for on-call engi
 
 # ============================================================
 # WEBHOOK: Receives alerts from Prometheus AlertManager
-# Automatically triggers Claude analysis when an SLO breaches
 # ============================================================
 @app.post("/webhook/alert")
 def receive_alert(payload: dict):
-    """
-    AlertManager POSTs here when an alert fires (matching our
-    Prometheus SLO rules from Session 5). Extracts pod/deployment
-    labels from the alert and automatically runs incident analysis.
-    """
+    """AlertManager POSTs here when an alert fires."""
     alerts = payload.get("alerts", [])
     results = []
 
@@ -222,8 +359,17 @@ def receive_alert(payload: dict):
             continue
 
         alert_name = labels.get("alertname", "unknown")
-        deployment_name = labels.get("deployment", "ema-backtester")
+        deployment_name = labels.get("deployment", "")
         pod_name = labels.get("pod", "")
+
+        # Skip alerts that don't specify our application deployment
+        if not deployment_name:
+            results.append({
+                "alert_name": alert_name,
+                "status": "skipped",
+                "reason": "no deployment label - not an application alert"
+            })
+            continue
 
         print(f"Alert received: {alert_name} | status={status} | pod={pod_name}")
 
@@ -251,13 +397,15 @@ def receive_alert(payload: dict):
                 IncidentAnalysisRequest(
                     pod_name=pod_name,
                     deployment_name=deployment_name,
-                    lines=50
+                    lines=50,
+                    alert_name=alert_name
                 )
             )
             results.append({
                 "alert_name": alert_name,
                 "status": "analyzed",
-                "analysis": analysis_result["analysis"]
+                "severity": analysis_result["severity"],
+                "slack_posted": analysis_result["slack_posted"]
             })
             print(f"Auto-analysis complete for alert: {alert_name}")
         except Exception as e:
@@ -271,13 +419,48 @@ def receive_alert(payload: dict):
 
 
 # ============================================================
+# QUERY: Get historical post-mortems
+# ============================================================
+@app.get("/postmortems")
+def get_postmortems(limit: int = 20):
+    """Returns recent incident post-mortems from the database."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            """SELECT id, alert_name, pod_name, deployment_name, severity,
+                      analysis, detected_at, slack_posted
+               FROM incident_postmortems
+               ORDER BY detected_at DESC
+               LIMIT %s""",
+            (limit,)
+        )
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return [
+            {
+                "id": r[0],
+                "alert_name": r[1],
+                "pod_name": r[2],
+                "deployment_name": r[3],
+                "severity": r[4],
+                "analysis": r[5],
+                "detected_at": r[6].isoformat(),
+                "slack_posted": r[7]
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+
+# ============================================================
 # APPROVAL: Generate a one-time approval token
 # ============================================================
 @app.post("/tools/request_approval")
 def request_approval(req: ApprovalRequest):
-    """
-    Generates a one-time approval token for a write operation.
-    """
+    """Generates a one-time approval token for a write operation."""
     token = secrets.token_urlsafe(16)
     APPROVAL_TOKENS[token] = {
         "reason": req.reason,
@@ -296,10 +479,7 @@ def request_approval(req: ApprovalRequest):
 # ============================================================
 @app.post("/tools/restart_pod")
 def restart_pod(req: RestartPodRequest):
-    """
-    WRITE operation. Deletes the specified pod — Kubernetes will
-    recreate it automatically if it's managed by a Deployment/ReplicaSet.
-    """
+    """WRITE operation. Deletes the specified pod — Kubernetes recreates it."""
     token_data = APPROVAL_TOKENS.get(req.approval_token)
 
     if not token_data:
@@ -322,14 +502,15 @@ def restart_pod(req: RestartPodRequest):
 
 
 # ============================================================
-# Health check for the MCP server itself
+# Health check
 # ============================================================
 @app.get("/health")
 def health():
     return {
         "status": "healthy",
         "service": "mcp-server",
-        "claude_configured": claude_client is not None
+        "claude_configured": claude_client is not None,
+        "slack_configured": SLACK_WEBHOOK_URL is not None
     }
 
 

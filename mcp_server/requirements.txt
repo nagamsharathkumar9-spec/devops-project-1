@@ -2,3 +2,5 @@ fastapi>=0.141.0
 uvicorn>=0.52.0
 kubernetes>=36.0.0
 anthropic>=0.40.0
+psycopg2-binary>=2.9.9
+requests>=2.31.0

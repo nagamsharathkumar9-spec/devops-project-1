@@ -9,12 +9,17 @@ stringData:
     global:
       resolve_timeout: 5m
     route:
-      receiver: 'mcp-webhook'
+      receiver: 'default-null'
+      routes:
+        - receiver: 'mcp-webhook'
+          match:
+            alertname: 'BacktesterPodDown'
       group_by: ['alertname']
       group_wait: 10s
       group_interval: 30s
       repeat_interval: 5m
     receivers:
+      - name: 'default-null'
       - name: 'mcp-webhook'
         webhook_configs:
           - url: 'http://mcp-server-service.default.svc.cluster.local:9000/webhook/alert'
