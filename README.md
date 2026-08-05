@@ -207,3 +207,59 @@ Pull Request → Tests + Trivy scan (quality gate before merge)
 
 Sharath Kumar | nagamsharathkumar9@gmail.com  
 GitHub: [nagamsharathkumar9-spec](https://github.com/nagamsharathkumar9-spec)
+
+## Project 3: AIOps — AI-Assisted Incident Response
+
+Built a Model Context Protocol (MCP) server that connects Claude API to
+the Kubernetes cluster, enabling automated incident diagnosis.
+
+### How it works
+
+```mermaid
+flowchart LR
+    A[Prometheus SLO Alert] --> B[AlertManager]
+    B -->|webhook| C[MCP Server]
+    C -->|get_pod_logs| D[Kubernetes API]
+    C -->|get_deployment_status| D
+    C --> E[Claude API]
+    E -->|structured analysis| C
+    C --> F[Slack #incidents]
+    C --> G[(PostgreSQL<br/>post-mortems)]
+```
+
+### MCP Tools
+
+| Tool | Type | Purpose |
+|------|------|---------|
+| `get_pod_logs` | Read | Fetch recent pod logs |
+| `get_deployment_status` | Read | Check replica health, conditions |
+| `analyze_incident` | AI | Claude analyzes logs + status, returns structured diagnosis |
+| `request_approval` | Safety | Generates single-use token for write operations |
+| `restart_pod` | Write (gated) | Deletes pod — requires valid approval token |
+
+### Security model
+
+Read operations execute immediately. Write operations require an
+explicit human-issued approval token, valid for single use only.
+This prevents the AI from taking destructive action autonomously
+while still allowing fast, informed human decision-making.
+
+### Chaos-tested results
+
+Ran 3 controlled failure injection scenarios (pod crash, DB connection
+failure, OOM kill) — see [CHAOS_TESTING.md](./CHAOS_TESTING.md) for
+full report.
+
+| Metric | Result |
+|--------|--------|
+| Average MTTR (failure → Slack notification) | 1 minute 49 seconds |
+| Diagnosis accuracy on application-level errors | 100% |
+| Diagnosis accuracy on infrastructure-level errors | Partial (documented gap) |
+
+### Known limitations
+
+`get_deployment_status` currently exposes replica counts and conditions
+but not container-level exit reasons (e.g., `OOMKilled`). This was
+discovered during chaos testing and is documented as a concrete next
+improvement — adding a `get_pod_events` tool to surface Kubernetes
+events directly.
