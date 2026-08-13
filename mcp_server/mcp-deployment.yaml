@@ -49,12 +49,20 @@ spec:
                 secretKeyRef:
                   name: slack-webhook
                   key: url
+            # DB_HOST now points to RDS instead of the in-cluster
+            # postgres-postgresql service. Migrated in Session B (RDS
+            # Multi-AZ). See RDS_MIGRATION.md for details.
+            - name: DB_HOST
+              value: "REPLACE_WITH_RDS_ENDPOINT"
+            - name: DB_NAME
+              value: "backtestdb"
+            - name: DB_USER
+              value: "backtester"
             - name: DB_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: postgres-credentials
                   key: password
-
 ---
 apiVersion: v1
 kind: Service
@@ -68,4 +76,3 @@ spec:
     - protocol: TCP
       port: 9000
       targetPort: 9000
-  type: ClusterIP
