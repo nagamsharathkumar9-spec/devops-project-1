@@ -3,7 +3,8 @@ kind: ServiceAccount
 metadata:
   name: mcp-server-sa
   namespace: default
-
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::227769753445:role/mcp-server-irsa-role
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -16,7 +17,6 @@ rules:
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["get", "list"]
-
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
