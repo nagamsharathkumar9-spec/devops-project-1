@@ -4,7 +4,7 @@ metadata:
   name: mcp-server-sa
   namespace: default
   annotations:
-    eks.amazonaws.com/role-arn: arn:aws:iam::227769753445:role/mcp-server-irsa-role
+    eks.amazonaws.com/role-arn: arn:aws:iam::227769753445:role/mcp-server-secrets-irsa-role
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
